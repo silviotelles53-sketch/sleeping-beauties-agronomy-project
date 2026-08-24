@@ -1,0 +1,285 @@
+from pathlib import Path
+import re
+
+import matplotlib.pyplot as plt
+import pandas as pd
+
+
+# --------------------------------------------------
+# CONFIGURAÇÕES
+# --------------------------------------------------
+
+ARQUIVO_DADOS = Path("data") / "data_piloto_agronomy_corrigido.txt"
+
+ARQUIVO_RESULTADOS = (
+    Path("resultados")
+    / "resultados_formula_ke.csv"
+)
+
+PASTA_GRAFICOS = (
+    Path("graficos")
+    / "curvas_individuais"
+)
+
+ANO_FINAL_CITACOES = 2025
+QUANTIDADE_POR_GRUPO = 3
+
+
+# --------------------------------------------------
+# FUNÇÕES AUXILIARES
+# --------------------------------------------------
+
+def limpar_nome_arquivo(texto):
+    """
+    Remove caracteres inválidos para nomes de arquivos no Windows.
+    """
+
+    texto = str(texto)
+
+    texto = re.sub(
+        r'[<>:"/\\|?*]',
+        "",
+        texto,
+    )
+
+    return texto.strip()[:80]
+
+
+def obter_citacoes(artigo):
+    """
+    Retorna os anos e as citações do artigo,
+    desde o ano de publicação até 2025.
+    """
+
+    ano_publicacao = int(
+        artigo["Publication Year"]
+    )
+
+    anos = list(
+        range(
+            ano_publicacao,
+            ANO_FINAL_CITACOES + 1,
+        )
+    )
+
+    citacoes = [
+        int(artigo[str(ano)])
+        for ano in anos
+    ]
+
+    return ano_publicacao, anos, citacoes
+
+
+def localizar_artigo(dados, resultado):
+    """
+    Localiza o artigo na base original.
+
+    Usa o DOI quando disponível.
+    Caso não exista DOI, utiliza título e ano.
+    """
+
+    doi = resultado.get("DOI")
+
+    if pd.notna(doi) and str(doi).strip():
+        encontrados = dados[
+            dados["DOI"].astype(str).str.strip()
+            == str(doi).strip()
+        ]
+
+        if not encontrados.empty:
+            return encontrados.iloc[0]
+
+    encontrados = dados[
+        (
+            dados["Title"].astype(str).str.strip()
+            == str(resultado["Title"]).strip()
+        )
+        & (
+            dados["Publication Year"]
+            == int(resultado["Publication Year"])
+        )
+    ]
+
+    if encontrados.empty:
+        raise ValueError(
+            "Artigo não encontrado na base original:\n"
+            f"{resultado['Title']}"
+        )
+
+    return encontrados.iloc[0]
+
+
+def criar_grafico(
+    artigo,
+    beauty_coefficient,
+    categoria,
+    posicao,
+):
+    """
+    Cria e salva a curva anual de citações do artigo.
+    """
+
+    ano_publicacao, anos, citacoes = obter_citacoes(
+        artigo
+    )
+
+    plt.figure(figsize=(11, 6))
+
+    plt.plot(
+        anos,
+        citacoes,
+        marker="o",
+        linewidth=1.8,
+    )
+
+    # Mostrar somente anos inteiros
+    plt.xticks(
+        anos,
+        rotation=45,
+    )
+
+    plt.xlabel("Ano")
+    plt.ylabel("Citações recebidas")
+
+    plt.title(
+        f"{artigo['Title']}\n"
+        f"Ano de publicação: {ano_publicacao} | "
+        f"Beauty Coefficient: {beauty_coefficient:.4f}"
+    )
+
+    plt.grid(
+        alpha=0.3,
+        linestyle="--",
+    )
+
+    plt.tight_layout()
+
+    nome_artigo = limpar_nome_arquivo(
+        artigo["Title"]
+    )
+
+    nome_arquivo = (
+        f"{categoria}_{posicao}_"
+        f"{nome_artigo}.png"
+    )
+
+    caminho_saida = (
+        PASTA_GRAFICOS
+        / nome_arquivo
+    )
+
+    plt.savefig(
+        caminho_saida,
+        dpi=300,
+        bbox_inches="tight",
+    )
+
+    plt.close()
+
+    print(
+        f"Gráfico criado: {caminho_saida}"
+    )
+
+
+# --------------------------------------------------
+# CARREGAR OS DADOS
+# --------------------------------------------------
+
+print("Carregando os dados...")
+
+dados = pd.read_csv(
+    ARQUIVO_DADOS,
+    sep="\t",
+    encoding="utf-16",
+    low_memory=False,
+)
+
+resultados = pd.read_csv(
+    ARQUIVO_RESULTADOS,
+)
+
+dados["Publication Year"] = pd.to_numeric(
+    dados["Publication Year"],
+    errors="coerce",
+)
+
+PASTA_GRAFICOS.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+
+# --------------------------------------------------
+# SELECIONAR OS 3 MAIORES E OS 3 MENORES BC
+# --------------------------------------------------
+
+maiores_bc = (
+    resultados
+    .sort_values(
+        "Beauty Coefficient",
+        ascending=False,
+    )
+    .head(QUANTIDADE_POR_GRUPO)
+)
+
+menores_bc = (
+    resultados
+    .sort_values(
+        "Beauty Coefficient",
+        ascending=True,
+    )
+    .head(QUANTIDADE_POR_GRUPO)
+)
+
+
+# --------------------------------------------------
+# GERAR GRÁFICOS DOS MAIORES BC
+# --------------------------------------------------
+
+for posicao, (_, resultado) in enumerate(
+    maiores_bc.iterrows(),
+    start=1,
+):
+    artigo = localizar_artigo(
+        dados,
+        resultado,
+    )
+
+    criar_grafico(
+        artigo=artigo,
+        beauty_coefficient=resultado[
+            "Beauty Coefficient"
+        ],
+        categoria="maior_bc",
+        posicao=posicao,
+    )
+
+
+# --------------------------------------------------
+# GERAR GRÁFICOS DOS MENORES BC
+# --------------------------------------------------
+
+for posicao, (_, resultado) in enumerate(
+    menores_bc.iterrows(),
+    start=1,
+):
+    artigo = localizar_artigo(
+        dados,
+        resultado,
+    )
+
+    criar_grafico(
+        artigo=artigo,
+        beauty_coefficient=resultado[
+            "Beauty Coefficient"
+        ],
+        categoria="menor_bc",
+        posicao=posicao,
+    )
+
+
+print("\nOs 6 gráficos foram concluídos.")
+print(
+    f"Arquivos salvos em: "
+    f"{PASTA_GRAFICOS.resolve()}"
+)
